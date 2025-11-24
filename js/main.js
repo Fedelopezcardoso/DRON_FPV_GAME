@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { Drone } from './physics.js';
 import { InputHandler } from './input.js';
+import { EnvironmentManager } from './environment.js';
+import { AudioManager } from './audio.js';
 
 class Game {
     constructor() {
@@ -14,94 +16,132 @@ class Game {
         this.clock = new THREE.Clock();
         this.input = new InputHandler();
         this.drone = new Drone(this.scene);
+        this.envManager = new EnvironmentManager(this.scene);
+        this.audio = new AudioManager();
 
-        this.initEnvironment();
+        this.isPlaying = false;
+        this.isPaused = false;
+
         this.setupLights();
+        this.setupUI();
 
         window.addEventListener('resize', () => this.onWindowResize(), false);
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Escape' && this.isPlaying) {
+                this.togglePause();
+            }
+        });
 
         this.animate();
     }
 
-    initEnvironment() {
-        // Basic ground
-        const geometry = new THREE.PlaneGeometry(1000, 1000);
-        const material = new THREE.MeshStandardMaterial({
-            color: 0x333333,
-            roughness: 0.8,
-            metalness: 0.2
-        });
-        const ground = new THREE.Mesh(geometry, material);
-        ground.rotation.x = -Math.PI / 2;
-        ground.receiveShadow = true;
-        this.scene.add(ground);
+    setupUI() {
+        document.getElementById('btn-city').addEventListener('click', () => this.startGame('CITY'));
+        document.getElementById('btn-jungle').addEventListener('click', () => this.startGame('JUNGLE'));
 
-        // Grid helper
-        const gridHelper = new THREE.GridHelper(1000, 100);
-        this.scene.add(gridHelper);
+        document.getElementById('btn-resume').addEventListener('click', () => this.togglePause());
+        document.getElementById('btn-restart').addEventListener('click', () => this.restartGame());
+        document.getElementById('btn-quit').addEventListener('click', () => this.quitToMenu());
 
-        // Some obstacles
-        for (let i = 0; i < 20; i++) {
-            const boxGeo = new THREE.BoxGeometry(5, 10, 5);
-            const boxMat = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
-            const box = new THREE.Mesh(boxGeo, boxMat);
-            box.position.set(
-                (Math.random() - 0.5) * 200,
-                5,
-                (Math.random() - 0.5) * 200
-            );
-            this.scene.add(box);
-        }
-
-        // Race Gates
-        for (let i = 0; i < 5; i++) {
-            this.createGate(new THREE.Vector3(0, 5, -20 - (i * 30)), i % 2 === 0 ? 0 : Math.PI / 4);
-        }
+        document.getElementById('btn-toggle-mode').addEventListener('click', () => this.toggleMode());
+        document.getElementById('btn-toggle-sound').addEventListener('click', () => this.toggleSound());
     }
 
-    createGate(position, rotationY = 0) {
-        const group = new THREE.Group();
+    toggleMode() {
+        const newMode = this.drone.mode === 'ACRO' ? 'LEVEL' : 'ACRO';
+        this.drone.setMode(newMode);
 
-        const material = new THREE.MeshStandardMaterial({ color: 0xffd700, emissive: 0xffaa00, emissiveIntensity: 0.5 });
+        // Update UI
+        const btnText = "MODE: " + newMode;
+        document.getElementById('btn-toggle-mode').innerText = btnText;
 
-        // Top bar
-        const top = new THREE.Mesh(new THREE.BoxGeometry(8, 0.5, 0.5), material);
-        top.position.y = 4;
-        group.add(top);
+        const hudEl = document.querySelector('#top-bar .hud-text:first-child');
+        if (hudEl) hudEl.innerText = btnText;
+    }
 
-        // Bottom bar
-        const bottom = new THREE.Mesh(new THREE.BoxGeometry(8, 0.5, 0.5), material);
-        bottom.position.y = -4;
-        group.add(bottom);
+    toggleSound() {
+        this.audio.toggleMute();
+        const btn = document.getElementById('btn-toggle-sound');
+        btn.innerText = "SOUND: " + (this.audio.isMuted ? "OFF" : "ON");
+    }
 
-        // Left post
-        const left = new THREE.Mesh(new THREE.BoxGeometry(0.5, 8, 0.5), material);
-        left.position.x = -4;
-        group.add(left);
+    startGame(mapType) {
+        // Init audio on first user interaction
+        this.audio.init();
 
-        // Right post
-        const right = new THREE.Mesh(new THREE.BoxGeometry(0.5, 8, 0.5), material);
-        right.position.x = 4;
-        group.add(right);
+        if (mapType === 'CITY') {
+            this.envManager.loadCity();
+            this.scene.background = new THREE.Color(0x87CEEB);
+            this.scene.fog = new THREE.Fog(0x87CEEB, 20, 500);
+        } else {
+            this.envManager.loadJungle();
+            this.scene.background = new THREE.Color(0x87CEEB);
+            this.scene.fog = new THREE.Fog(0x87CEEB, 20, 400);
+        }
 
-        group.position.copy(position);
-        group.rotation.y = rotationY;
+        document.getElementById('main-menu').style.display = 'none';
+        document.getElementById('ui-layer').style.display = 'flex';
+        this.isPlaying = true;
+        this.isPaused = false;
 
-        this.scene.add(group);
-        return group;
+        this.resetDrone();
+    }
+
+    resetDrone() {
+        this.drone.mesh.position.set(0, 2, 0);
+        this.drone.velocity.set(0, 0, 0);
+        this.drone.rotation.set(0, 0, 0);
+        this.drone.mesh.rotation.set(0, 0, 0);
+        this.drone.angularVelocity.set(0, 0, 0);
+    }
+
+    restartGame() {
+        this.resetDrone();
+        this.togglePause(); // Unpause
+    }
+
+    quitToMenu() {
+        this.isPlaying = false;
+        this.isPaused = false;
+        document.getElementById('pause-menu').style.display = 'none';
+        document.getElementById('ui-layer').style.display = 'none';
+        document.getElementById('main-menu').style.display = 'flex';
+        this.audio.stop();
+    }
+
+    togglePause() {
+        this.isPaused = !this.isPaused;
+        const pauseMenu = document.getElementById('pause-menu');
+
+        if (this.isPaused) {
+            pauseMenu.style.display = 'flex';
+            this.audio.stop();
+        } else {
+            pauseMenu.style.display = 'none';
+        }
     }
 
     setupLights() {
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
         this.scene.add(ambientLight);
 
-        const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
         dirLight.position.set(50, 100, 50);
         dirLight.castShadow = true;
-        this.scene.add(dirLight);
 
-        this.scene.background = new THREE.Color(0x87CEEB); // Sky blue
-        this.scene.fog = new THREE.Fog(0x87CEEB, 20, 500);
+        // Improve shadow quality
+        dirLight.shadow.mapSize.width = 2048;
+        dirLight.shadow.mapSize.height = 2048;
+        dirLight.shadow.camera.near = 0.5;
+        dirLight.shadow.camera.far = 500;
+        dirLight.shadow.camera.left = -100;
+        dirLight.shadow.camera.right = 100;
+        dirLight.shadow.camera.top = 100;
+        dirLight.shadow.camera.bottom = -100;
+
+        this.scene.add(dirLight);
+        this.renderer.shadowMap.enabled = true;
+        this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     }
 
     onWindowResize() {
@@ -113,20 +153,25 @@ class Game {
     animate() {
         requestAnimationFrame(() => this.animate());
 
+        if (!this.isPlaying) {
+            this.renderer.render(this.scene, this.camera);
+            return;
+        }
+
+        if (this.isPaused) {
+            return;
+        }
+
         const dt = this.clock.getDelta();
         const inputState = this.input.getState();
 
-        // Handle Mode Toggle
+        // Handle Mode Toggle (Keyboard Shortcut)
         if (inputState.toggleMode) {
-            const newMode = this.drone.mode === 'ACRO' ? 'LEVEL' : 'ACRO';
-            this.drone.setMode(newMode);
-
-            // Visual feedback
-            const modeEl = document.querySelector('#top-bar .hud-text:first-child');
-            if (modeEl) modeEl.innerText = "MODE: " + newMode;
+            this.toggleMode();
         }
 
-        this.drone.update(dt, inputState);
+        this.drone.update(dt, inputState, this.envManager.objects);
+        this.audio.update(inputState.thrust);
 
         // Update camera to follow drone (FPV)
         this.drone.updateCamera(this.camera);

@@ -14,13 +14,17 @@ export class Drone {
         this.maxThrust = 30.0; // m/s^2
         this.mass = 0.5; // kg
         this.drag = 0.5; // Air resistance
-        this.angularDrag = 4.0; // Higher drag for snappier feel
-        this.acroRate = 5.0; // Rad/s for full stick in Acro
-        this.angleRate = 1.0; // Max angle in radians for Level mode (~57 degrees)
-        this.levelStrength = 10.0; // How fast it self-levels
+        this.angularDrag = 6.0; // Higher drag for snappier feel (was 4.0)
+        this.acroRate = 8.0; // Rad/s for full stick in Acro (was 5.0) - Faster flips
+        this.angleRate = 0.78; // Max angle in radians for Level mode (~45 degrees)
+        this.levelStrength = 15.0; // How fast it self-levels (was 10.0) - Snappier level
         this.gravity = -9.81;
 
         this.mode = 'ACRO'; // ACRO or LEVEL
+
+        // Collision
+        this.raycaster = new THREE.Raycaster();
+        this.collisionRadius = 0.5;
     }
 
     setMode(mode) {
@@ -54,7 +58,7 @@ export class Drone {
         return group;
     }
 
-    update(dt, input) {
+    update(dt, input, collidables = []) {
         // 1. Rotation Logic
 
         if (this.mode === 'ACRO') {
@@ -119,6 +123,32 @@ export class Drone {
 
         // Update velocity
         this.velocity.add(acceleration.clone().multiplyScalar(dt));
+
+        // Check for collisions BEFORE moving
+        if (collidables.length > 0 && this.velocity.length() > 0.1) {
+            const direction = this.velocity.clone().normalize();
+            this.raycaster.set(this.mesh.position, direction);
+
+            // Look ahead based on speed (at least collisionRadius)
+            const lookAhead = Math.max(this.collisionRadius, this.velocity.length() * dt * 2);
+
+            const intersects = this.raycaster.intersectObjects(collidables, true);
+
+            if (intersects.length > 0 && intersects[0].distance < lookAhead) {
+                // CRASH!
+                console.log("CRASH!");
+
+                // Simple crash response: Stop and bounce back slightly
+                this.velocity.multiplyScalar(-0.5);
+
+                // Add some random spin for effect
+                this.angularVelocity.set(
+                    (Math.random() - 0.5) * 10,
+                    (Math.random() - 0.5) * 10,
+                    (Math.random() - 0.5) * 10
+                );
+            }
+        }
 
         // Update position
         this.mesh.position.add(this.velocity.clone().multiplyScalar(dt));
